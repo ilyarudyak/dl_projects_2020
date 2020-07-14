@@ -67,8 +67,11 @@ class FlowersDataSet:
 
     def __init__(self):
         self.GCS_IN_PATTERN = 'gs://flowers-public/*/*.jpg'
-        self.GCS_OUT_DIR = Path('tfrecords-jpeg-192x192')
-        self.GCS_OUT_PATTERN = 'tfrecords-jpeg-192x192/flowers'
+
+        # self.GCS_OUT_DIR = Path('tfrecords-jpeg-192x192')
+        # self.GCS_OUT_PATTERN = 'tfrecords-jpeg-192x192/flowers'
+        self.GCS_OUT_PATTERN = 'gs://dl-projects-2020-bucket-1/flowers/tfrecords-jpeg-192x192/flowers'
+
         self.SHARDS = 16
         self.TARGET_SIZE = [192, 192]
         self.CLASSES = [b'daisy', b'dandelion', b'roses', b'sunflowers', b'tulips']
@@ -152,7 +155,7 @@ class FlowersDataSet:
 
         # if parents is true, any missing parents of this path are created as needed.
         # if exist_ok is true, FileExistsError exceptions will be ignored.
-        self.GCS_OUT_DIR.mkdir(parents=True, exist_ok=True)
+        # self.GCS_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
         print("===> writing TFRecords ...")
         for shard, (image, label) in enumerate(self.dataset_from_files.take(1)):
@@ -317,6 +320,6 @@ class FlowersDataSet2:
 if __name__ == '__main__':
     fds = FlowersDataSet()
     fds.write_tfrecord()
-    fds.read_tfrecord()
-    for image, class_num in fds.dataset_from_tfr.take(1):
-        print(image.shape, class_num)
+    # fds.read_tfrecord()
+    # for image, class_num in fds.dataset_from_tfr.take(1):
+    #     print(image.shape, class_num)
