@@ -273,5 +273,4 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python,pycharm,virtualenv
-!/.gitignore
-!/_misc/flowers/tfrecords-jpeg-192x192/
+/_misc/flowers/tfrecords-jpeg-192x192/

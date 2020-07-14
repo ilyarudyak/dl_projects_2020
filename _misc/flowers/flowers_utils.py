@@ -312,3 +312,8 @@ class FlowersDataSet2:
                                                 label.numpy()[i])
                     out_file.write(example.SerializeToString())
                 print(f'{filename} with {shard_size} records DONE')
+
+
+if __name__ == '__main__':
+    fds = FlowersDataSet()
+    fds.write_tfrecord()
