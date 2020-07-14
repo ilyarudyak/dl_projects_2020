@@ -317,3 +317,6 @@ class FlowersDataSet2:
 if __name__ == '__main__':
     fds = FlowersDataSet()
     fds.write_tfrecord()
+    fds.read_tfrecord()
+    for image, class_num in fds.dataset_from_tfr.take(1):
+        print(image.shape, class_num)
