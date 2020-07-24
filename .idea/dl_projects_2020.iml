@@ -5,6 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/_misc" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/_misc/flowers" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/medicine/chexnet/debug" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/venv" />
     </content>
     <orderEntry type="inheritedJdk" />

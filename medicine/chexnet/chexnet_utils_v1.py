@@ -13,12 +13,11 @@ AUTO = tf.data.experimental.AUTOTUNE
 
 
 class Params:
-
     LEARNING_RATE = 0.001
     BATCH_SIZE = 32
     EPOCHS = 5
 
-    #parameters for dataset
+    # parameters for dataset
     CLASSES = [
         'Atelectasis',
         'Cardiomegaly',
@@ -41,7 +40,9 @@ class Params:
     NO_FINDING = 'No_Finding'
     PNEUMONIA = 'Pneumonia'
     NOT_PNEUMONIA = 'not ' + PNEUMONIA
-    TRAIN_SHUFFLE_BUFFER = 2048
+    SHUFFLE_BUFFER = 2048
+    READER_SHUFFLE_BUFFER_TRAIN = 3000
+    READER_SHUFFLE_BUFFER_VAL = 1000
 
     # parameters for the model
     IMAGE_SIZE = [224, 224]
@@ -74,8 +75,10 @@ class ChexnetUtils:
             plt.imshow(image)
 
             label = label.numpy()
-            if is_pneumonia: label = ChexnetUtils.get_label_pneumonia(label)
-            else: label = ChexnetUtils.get_label_full(label)
+            if is_pneumonia:
+                label = ChexnetUtils.get_label_pneumonia(label)
+            else:
+                label = ChexnetUtils.get_label_full(label)
             plt.title(label, fontsize=12)
 
             subplot += 1
@@ -95,9 +98,9 @@ class ChexnetUtils:
         return '|'.join(labels)
 
     @staticmethod
-    def plot_sample_from_batch(batched_dataset, is_pneumonia=True):
+    def plot_sample_from_batch(batched_dataset, is_prep=True, is_pneumonia=True):
         dataset = batched_dataset.take(1).unbatch()
-        ChexnetUtils.plot_sample_from_dataset(dataset, is_pneumonia=is_pneumonia)
+        ChexnetUtils.plot_sample_from_dataset(dataset, is_prep=is_prep, is_pneumonia=is_pneumonia)
 
     @staticmethod
     def save_history(history, trainer):
@@ -185,7 +188,7 @@ class CheXNetDataset:
         print(f'===> getting label_dict ... ')
         self.df_original = pd.read_csv(self.DF_LABELS_PATH)
         # change 'No Finding' to 'No_Finding'
-        self.df_original .loc[self.df_original['Finding Labels'] == 'No Finding', 'Finding Labels'] = 'No_Finding'
+        self.df_original.loc[self.df_original['Finding Labels'] == 'No Finding', 'Finding Labels'] = 'No_Finding'
         # get mapping of image name to its labels
         self.labels_dict = pd.Series(self.df_original['Finding Labels'].values,
                                      index=self.df_original['Image Index']).to_dict()
@@ -205,11 +208,15 @@ class CheXNetDataset:
         self.df_files = pd.DataFrame(list(files_str), columns=[self.FILE_PATH], dtype='string')
 
         # add column with patient_id
-        def get_patient(file_path): return str(file_path).split('/')[-1][:-8]
+        def get_patient(file_path):
+            return str(file_path).split('/')[-1][:-8]
+
         self.df_files[self.PATIENT_ID] = self.df_files[self.FILE_PATH].apply(get_patient).astype('string')
 
         # add column with labels from original df provided in dataset
-        def get_label(file_path): return self.labels_dict[file_path.split('/')[-1]]
+        def get_label(file_path):
+            return self.labels_dict[file_path.split('/')[-1]]
+
         self.df_files[self.LABELS] = self.df_files[self.FILE_PATH].apply(get_label).astype('string')
 
         # add labels as array for full 14 disease problem
@@ -221,6 +228,7 @@ class CheXNetDataset:
                     index = params.CLASSES.index(label)
                     labels_arr[index] = 1
             return labels_arr
+
         self.df_files[self.LABELS_ARRAY] = self.df_files[self.LABELS].apply(get_labels_as_array)
 
         # add label for pneumonia
@@ -242,7 +250,7 @@ class CheXNetDataset:
         # split patients using sklearn
         patients_train, patients_val = train_test_split(list(patients),
                                                         train_size=params.TRAIN_SPLIT,
-                                                        test_size=1-params.TRAIN_SPLIT,
+                                                        test_size=1 - params.TRAIN_SPLIT,
                                                         random_state=params.SEED)
         patients_val, patients_test = train_test_split(patients_val,
                                                        train_size=.5,
@@ -252,10 +260,14 @@ class CheXNetDataset:
 
         # add split to main dataframe
         def get_split(patient_id):
-            if patient_id in patients_train: return self.SPLIT_TRAIN
-            elif patient_id in patients_val: return self.SPLIT_VAl
-            elif patient_id in patients_test: return self.SPLIT_TEST
-            else: raise ValueError('wrong patient_id')
+            if patient_id in patients_train:
+                return self.SPLIT_TRAIN
+            elif patient_id in patients_val:
+                return self.SPLIT_VAl
+            elif patient_id in patients_test:
+                return self.SPLIT_TEST
+            else:
+                raise ValueError('wrong patient_id')
 
         self.df_files[self.SPLIT] = self.df_files[self.PATIENT_ID].apply(get_split).astype('string')
 
@@ -278,21 +290,24 @@ class CheXNetDataset:
 
         def _decode_image(file_path):
             image_bytes = tf.io.read_file(file_path)
-            image = tf.image.decode_jpeg(image_bytes, channels=3)
+            image = tf.image.decode_jpeg(image_bytes, channels=params.CHANNELS)
             image = tf.image.resize(image, params.IMAGE_SIZE)
             return image
 
         # load slices of dataframe into dataset
-        if self.is_pneumonia: labels = df[self.LABEL_PNEUMONIA].values
-        else: labels = np.stack(df[self.LABELS_ARRAY].values, axis=0)
+        if self.is_pneumonia:
+            labels = df[self.LABEL_PNEUMONIA].values
+        else:
+            labels = np.stack(df[self.LABELS_ARRAY].values, axis=0)
         files = df[self.FILE_PATH].values
         list_ds = tf.data.Dataset.from_tensor_slices((files, labels))
 
         # preprocess dataset
-        dataset = list_ds.map(partial(_prepocess, _is_train=is_train))
+        # dataset is small enough to fit in memory
+        dataset = list_ds.map(partial(_prepocess, _is_train=is_train)).cache()
 
         if is_train:
-            dataset = dataset.shuffle(params.TRAIN_SHUFFLE_BUFFER).repeat()
+            dataset = dataset.shuffle(params.SHUFFLE_BUFFER).repeat()
 
         dataset = dataset.batch(params.BATCH_SIZE).prefetch(AUTO)
 
@@ -302,3 +317,243 @@ class CheXNetDataset:
         self.ds_train = self._get_dataset(df=self.df_train, is_train=True)
         self.ds_val = self._get_dataset(df=self.df_val)
         self.ds_test = self._get_dataset(df=self.df_test)
+
+
+class TFRecordWriter:
+    IMAGE = 'image'
+    LABEL = 'label'
+    FILE_PREFIX = 'chexnet'
+    WORKING_DIR = Path('/kaggle/working/')
+
+    @staticmethod
+    def _to_tfrecord(img_bytes, label_arr):
+
+        def _bytestring_feature(list_of_bytes):
+            return tf.train.Feature(bytes_list=tf.train.BytesList(value=list_of_bytes))
+
+        def _float_feature(list_of_floats):  # float32
+            return tf.train.Feature(float_list=tf.train.FloatList(value=list_of_floats))
+
+        feature = {
+            # one image in the list
+            TFRecordWriter.IMAGE: _bytestring_feature([img_bytes]),
+            TFRecordWriter.LABEL: _float_feature(label_arr.tolist()),
+        }
+        return tf.train.Example(features=tf.train.Features(feature=feature))
+
+    @staticmethod
+    def write_tfrecords(ds, split='train'):
+
+        print(f'===> writing TFRecords split:{split} ...')
+        for shard, (image_batch, label_batch) in enumerate(ds):
+
+            # batch size used as shard size here
+            shard_size = image_batch.numpy().shape[0]
+
+            # good practice to have the number of records in the filename
+            image_size = params.IMAGE_SIZE[0]
+            out_dir = TFRecordWriter.WORKING_DIR / f'tfrecords-jpeg-{image_size}x{image_size}'
+            out_dir = out_dir / split
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_pattern = f'{str(out_dir)}/chexnet'
+            filename = f'{out_pattern}-{shard:02d}-{shard_size}.tfrec'
+
+            with tf.io.TFRecordWriter(filename) as out_file:
+                for i in range(shard_size):
+                    example = TFRecordWriter._to_tfrecord(image_batch.numpy()[i],
+                                                          label_batch.numpy()[i])
+                    out_file.write(example.SerializeToString())
+                print(f'{filename}')
+        print(f'===> writing TFRecords split:{split} DONE')
+
+
+class CheXNetTFRecordWriter:
+
+    def __init__(self):
+
+        # dataframes columns
+        self.FILE_PATH = 'file_path'
+        self.PATIENT_ID = 'patient_id'
+        self.SPLIT = 'split'
+        self.LABELS = 'labels'
+        self.LABELS_ARRAY = 'labels_array'
+        self.LABEL_PNEUMONIA = 'label_pneumonia'
+        self.PNEUMONIA = 'Pneumonia'
+
+        # dataframes
+        self.df = None
+        self.df_train = None
+        self.df_val = None
+        self.df_test = None
+        self._get_dataframes()
+
+        # directories and files
+        self.WORKING_DIR = Path('/kaggle/working')
+
+        # params for dataset
+        self.N_IMAGES = 112120
+        self.SHARD_SIZE_TRAIN = 3000
+        self.SHARD_SIZE_VAL = 1000
+
+        # datasets to write
+        self.SPLIT_TRAIN = 'train'
+        self.SPLIT_VAL = 'val'
+        self.SPLIT_TEST = 'test'
+        self.ds_train = None
+        self.ds_val = None
+        self.ds_test = None
+        self._get_datasets_to_write()
+
+    def _get_dataframes(self):
+        cds = CheXNetDataset(is_pneumonia=False)
+        self.df = cds.df_files
+        self.df_train = cds.df_train
+        self.df_val = cds.df_val
+        self.df_test = cds.df_test
+
+    def _get_dataset_to_write(self, df, split='train'):
+        """
+        We prepare dataset to write into TFRecord:
+        - decode images;
+        - resize them to given size (key operation);
+        - encode again into byte string;
+        No pre-processing, it will be performed after reading
+        a TFRecord file.
+        """
+
+        def _decode_image(file_name):
+            bits = tf.io.read_file(file_name)
+            image = tf.image.decode_jpeg(bits, channels=params.CHANNELS)
+            image = tf.image.resize(image, params.IMAGE_SIZE)
+            return image
+
+        def _encode_image(image):
+            image = tf.cast(image, tf.uint8)
+            image = tf.image.encode_jpeg(image, optimize_size=True, chroma_downsampling=False)
+            return image
+
+        def _process(filename, label, split=self.SPLIT_TRAIN):
+            image = _decode_image(filename)
+            image = _encode_image(image)
+            label = tf.cast(label, dtype=tf.float32)
+            return image, label
+
+        files = df[self.FILE_PATH].values
+        # we have to stack a sequence of arrays to get 2D array
+        labels = np.stack(df[self.LABELS_ARRAY].values, axis=0)
+        # we need to supply a tuple to get supervised dataset
+        if split == self.SPLIT_TRAIN: shard_size = self.SHARD_SIZE_TRAIN
+        else: shard_size = self.SHARD_SIZE_VAL
+        ds = tf.data.Dataset.from_tensor_slices((files, labels)) \
+            .map(_process, num_parallel_calls=AUTO)\
+            .batch(shard_size)
+        return ds
+
+    def _get_datasets_to_write(self):
+        self.ds_train = self._get_dataset_to_write(self.df_train, split=self.SPLIT_TRAIN)
+        self.ds_val = self._get_dataset_to_write(self.df_val, split=self.SPLIT_VAL)
+        self.ds_test = self._get_dataset_to_write(self.df_test, split=self.SPLIT_TEST)
+
+    def write_tfrecord_datasets(self):
+        TFRecordWriter.write_tfrecords(self.ds_train.take(2), split=self.SPLIT_TRAIN)
+        TFRecordWriter.write_tfrecords(self.ds_val.take(2), split=self.SPLIT_VAL)
+        TFRecordWriter.write_tfrecords(self.ds_test.take(2), split=self.SPLIT_TEST)
+
+
+class TFRecordReader:
+
+    IMAGE = 'image'
+    LABEL = 'label'
+    FILE_PREFIX = 'chexnet'
+    WORKING_DIR = Path('/kaggle/working/')
+    FEATURES = {
+        # tf.string = bytestring (not text string)
+        IMAGE: tf.io.FixedLenFeature([], tf.string),
+        # a certain number of floats
+        LABEL: tf.io.VarLenFeature(tf.float32)
+    }
+
+    @staticmethod
+    def read_tfrecord(example):
+        parsed_example = tf.io.parse_single_example(example, features=TFRecordReader.FEATURES)
+        image = parsed_example[TFRecordReader.IMAGE]
+        image = tf.image.decode_jpeg(image, channels=params.CHANNELS)
+        image = tf.reshape(image, [*params.IMAGE_SIZE, params.CHANNELS])
+        label = parsed_example[TFRecordReader.LABEL]
+        label = tf.sparse.to_dense(label)
+        return image, label
+
+
+class CheXNetTFRecordReader:
+
+
+    def __init__(self):
+
+        # patterns on GCS
+        # self.GCS_OUT_PATTERN = 'gs://dl-projects-2020-bucket-1/flowers/tfrecords-jpeg-192x192/flowers'
+        size = params.IMAGE_SIZE[0]
+        self.GCS_DATA_DIR = Path(f'/kaggle/working/tfrecords-jpeg-{size}x{size}')
+        self.SPLIT_TRAIN = 'train'
+        self.SPLIT_VAl = 'val'
+        self.SPLIT_TEST = 'test'
+
+        # datasets for all splits
+        self.ds_train = None
+        self.ds_val = None
+        self.ds_test = None
+        self._get_datasets()
+
+    def _get_pattern(self, split):
+        split_dir = self.GCS_DATA_DIR / split
+        return f'{str(split_dir)}/{TFRecordWriter.FILE_PREFIX}*.tfrec'
+
+    def _read_dataset(self, split):
+        """
+        This function performs the following operations:
+        - list all TFRecord files based on a pattern for a given split;
+        - create a TFRecordDataset dataset;
+        - read files using TFRecordReader;
+        - shuffle files using a buffer based on a given split;
+        """
+        split_pattern = self._get_pattern(split)
+        filenames = tf.io.gfile.glob(split_pattern)
+        ds = tf.data.TFRecordDataset(filenames, num_parallel_reads=AUTO)
+        ds = ds.map(TFRecordReader.read_tfrecord, num_parallel_calls=AUTO)
+        if split == self.SPLIT_TRAIN: shuffle_buffer = params.READER_SHUFFLE_BUFFER_TRAIN
+        else: shuffle_buffer = params.READER_SHUFFLE_BUFFER_VAL
+        ds = ds.shuffle(shuffle_buffer)
+        return ds
+
+    @staticmethod
+    def _process(image, label, split):
+        #augment data if train dataset
+        if split == 'train': image = tf.image.random_flip_left_right(image)
+        image = tf.cast(image, tf.float32)
+        image = tf.keras.applications.xception.preprocess_input(image)
+        return image, label
+
+    def _process_dataset(self, split):
+        """
+        order of operations:
+        -> read
+        -> pre-process (augmentation + normalization)
+        -> cache (if small)
+        -> repeat -> shuffle (if train)
+        -> batch -> prefetch
+        """
+        ds = self._read_dataset(split)\
+            .map(partial(CheXNetTFRecordReader._process, split=split)) \
+            .cache()
+
+        if split == self.SPLIT_TRAIN:
+            ds = ds.repeat().shuffle(params.SHUFFLE_BUFFER)
+
+        ds = ds.batch(params.BATCH_SIZE).prefetch(AUTO)
+
+        return ds
+
+    def _get_datasets(self):
+        self.ds_train = self._process_dataset(split=self.SPLIT_TRAIN)
+        self.ds_val = self._process_dataset(split=self.SPLIT_VAl)
+        self.ds_test = self._process_dataset(split=self.SPLIT_TEST)
+
