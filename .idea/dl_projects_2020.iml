@@ -6,6 +6,12 @@
       <sourceFolder url="file://$MODULE_DIR$/_misc" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/_misc/flowers" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/medicine/chexnet/debug" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/_misc/vision_models" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/medicine" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/_misc/vision_models/lenet-mnist" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/_misc/vision_models/lenet-mnist/pyimagesearch" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/medicine/chexnet" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/medicine/aptos" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/venv" />
     </content>
     <orderEntry type="inheritedJdk" />

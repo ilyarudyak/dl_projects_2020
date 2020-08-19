@@ -63,6 +63,8 @@ class Params:
 
         # down sampling params
         self.DOWN_SAMPLING_RATIO = 1
+        self.DOWN_SAMPLING_ALL = 'down_sample_all'
+        self.DOWN_SAMPLING_NO_FINDING = 'down_sample_no_finding'
 
         # parameters for the model
         self.IMAGE_SIZE = [224, 224]
@@ -82,6 +84,13 @@ class Params:
         self.PROJECT_ID = 'dl-projects-2020'
         self.BUCKET_NAME = 'dl-projects-2020-bucket-1'
         self.CHEXNET_BLOB = 'chexnet'
+        self.GCS_DIR = 'gs://dl-projects-2020-bucket-1/chexnet'
+        self.WEIGHT_FILE = 'weights.h5'
+        self.HISTORY_FILE = 'history.pickle'
+        self.PARAMS_FILE = 'params.json'
+
+        # brief description of the training
+        self.MESSAGE = 'this is a message about the training ...'
 
         self.SEED = 42
 
@@ -158,6 +167,27 @@ class ChexnetUtils:
         return history
 
     @staticmethod
+    def load_files_from_cloud(destination='01-pneumonia-downsampling-1',
+                              is_params=False,
+                              is_history=False,
+                              is_weights=False):
+
+        if is_params:
+            source_blob_name = f'{params.CHEXNET_BLOB}/{destination}/{params.PARAMS_FILE}'
+            ChexnetUtils.download_blob(source_blob_name=source_blob_name,
+                                       destination_file_name=params.PARAMS_FILE)
+
+        if is_history:
+            source_blob_name = f'{params.CHEXNET_BLOB}/{destination}/{params.HISTORY_FILE}'
+            ChexnetUtils.download_blob(source_blob_name=source_blob_name,
+                                       destination_file_name=params.HISTORY_FILE)
+
+        if is_weights:
+            source_blob_name = f'{params.CHEXNET_BLOB}/{destination}/{params.WEIGHT_FILE}'
+            ChexnetUtils.download_blob(source_blob_name=source_blob_name,
+                                       destination_file_name=params.WEIGHT_FILE)
+
+    @staticmethod
     def plot_metric(metric, trainer):
         history = ChexnetUtils.load_history(trainer)
         plt.plot(history[metric], label=metric)
@@ -167,9 +197,9 @@ class ChexnetUtils:
         plt.title(metric)
 
     @staticmethod
-    def upload_files(trainer, parameters,
-                     destination='01-pneumonia-downsampling-1',
-                     is_weights=False):
+    def upload_files_to_cloud(trainer, parameters,
+                              destination='01-pneumonia-downsampling-1',
+                              is_weights=False):
         destination_blob_name = f'{params.CHEXNET_BLOB}/{destination}/{trainer.history_file}'
         ChexnetUtils.upload_blob(source_file_name=trainer.history_file,
                                  destination_blob_name=destination_blob_name)
@@ -185,6 +215,16 @@ class ChexnetUtils:
                                  destination_blob_name=destination_blob_name)
 
     @staticmethod
+    def download_blob(bucket_name=params.BUCKET_NAME,
+                      source_blob_name=None,
+                      destination_file_name=None):
+        storage_client = storage.Client(project=params.PROJECT_ID)
+        bucket = storage_client.get_bucket(bucket_name)
+        blob = bucket.blob(source_blob_name)
+        blob.download_to_filename(destination_file_name)
+        print(f'===> blob {source_blob_name} downloaded to {destination_file_name}')
+
+    @staticmethod
     def upload_blob(bucket_name=params.BUCKET_NAME,
                     source_file_name=None,
                     destination_blob_name=None):
@@ -192,7 +232,7 @@ class ChexnetUtils:
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_filename(source_file_name)
-        print(f'file {source_file_name} uploaded to {destination_blob_name}')
+        print(f'===> file {source_file_name} uploaded to {destination_blob_name}')
 
     # @staticmethod
     # # TODO correct plotting of history with continued epochs
@@ -214,7 +254,10 @@ class CheXNetDataset:
     This class writes TFRecord files for NIH
     """
 
-    def __init__(self, is_pneumonia=True):
+    def __init__(self,
+                 is_pneumonia=True,
+                 down_sample=params.DOWN_SAMPLING_ALL,
+                 is_cache=False):
 
         # directories and files
         self.DATA_DIR = Path('/kaggle/input/data')
@@ -245,10 +288,12 @@ class CheXNetDataset:
         self.df_train = None
         self.df_val = None
         self.df_test = None
-        # self._get_patient_splits()
-        # self._down_sample_dfs()
+        self._get_patient_splits()
+        self.down_sample = down_sample
+        self._down_sample_dfs()
 
         # datasets
+        self.is_cache = is_cache
         self.is_pneumonia = is_pneumonia
         self.ds_train = None
         self.ds_val = None
@@ -307,7 +352,12 @@ class CheXNetDataset:
         print(f'===> getting df_files DONE ')
 
     @staticmethod
-    def _down_sample(df):
+    def _down_sample_from_all(df):
+        """
+        Pneumonia is an unbalanced class: we have only ~1%
+        images labelled as pneumonia. We take them all and also
+        we sample some amount (based on ratio) of ALL other labels.
+        """
         # get df that contain only pneumonia
         dfp = df[df.label_pneumonia == 1]
         n = len(dfp) * params.DOWN_SAMPLING_RATIO
@@ -318,10 +368,33 @@ class CheXNetDataset:
         # concatenate them back
         return pd.concat([dfp, dfnps])
 
+    @staticmethod
+    def _down_sample_from_no_finding(df):
+        """
+        The idea is the same as before but this time
+        we sample only from `No_Finding` label.
+        """
+        # get df that contain only pneumonia
+        dfp = df[df.label_pneumonia == 1]
+        n = len(dfp) * params.DOWN_SAMPLING_RATIO
+        # get df that contain only No_Finding label
+        dfnp = df[df.labels == params.NO_FINDING]
+        # sample n rows
+        dfnps = dfnp.sample(n=n, random_state=params.SEED)
+        # concatenate them back
+        return pd.concat([dfp, dfnps])
+
     def _down_sample_dfs(self):
-        self.df_train = CheXNetDataset._down_sample(self.df_train)
-        self.df_val = CheXNetDataset._down_sample(self.df_val)
-        self.df_test = CheXNetDataset._down_sample(self.df_test)
+        if self.down_sample == params.DOWN_SAMPLING_ALL:
+            _down_sample_fun = CheXNetDataset._down_sample_from_all
+        elif self.down_sample == params.DOWN_SAMPLING_NO_FINDING:
+            _down_sample_fun = CheXNetDataset._down_sample_from_no_finding
+        else:
+            raise ValueError('wrong down_sample parameter')
+
+        self.df_train = _down_sample_fun(self.df_train)
+        self.df_val = _down_sample_fun(self.df_val)
+        self.df_test = _down_sample_fun(self.df_test)
 
     def _get_patient_splits(self):
 
@@ -336,7 +409,7 @@ class CheXNetDataset:
             # split patients using sklearn
             patients_train, patients_val = train_test_split(list(patients),
                                                             train_size=params.TRAIN_SPLIT,
-                                                            test_size=1-params.TRAIN_SPLIT,
+                                                            test_size=1 - params.TRAIN_SPLIT,
                                                             random_state=params.SEED)
             patients_val, patients_test = train_test_split(patients_val,
                                                            train_size=.7,
@@ -390,8 +463,10 @@ class CheXNetDataset:
 
         # preprocess dataset
         # dataset is small enough to fit in memory
-        dataset = list_ds.map(partial(_prepocess, _is_train=is_train)) \
-            # .cache()
+        dataset = list_ds.map(partial(_prepocess, _is_train=is_train))
+
+        if self.is_cache:
+            dataset = dataset.cache()
 
         if is_train:
             dataset = dataset.shuffle(params.SHUFFLE_BUFFER).repeat()
@@ -716,9 +791,9 @@ class CheXNetTrainer:
 
         ##### directories and files
         self.working_dir = Path('.')
-        self.weight_file = self.working_dir / 'weights.h5'
-        self.history_file = self.working_dir / 'history.pickle'
-        self.params_file = self.working_dir / 'params.json'
+        self.weight_file = self.working_dir / params.WEIGHT_FILE
+        self.history_file = self.working_dir / params.HISTORY_FILE
+        self.params_file = self.working_dir / params.PARAMS_FILE
 
         # datasets
         self.cds = CheXNetDataset()
@@ -833,4 +908,4 @@ class CheXNetTrainer:
 
 
 if __name__ == '__main__':
-    print(type(params.to_json()))
+    ChexnetUtils.load_files_from_cloud(is_params=True)
